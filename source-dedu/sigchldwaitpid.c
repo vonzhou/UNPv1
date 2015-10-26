@@ -7,6 +7,6 @@ sig_chld(int signo)
 	int		stat;
 
 	while ( (pid = waitpid(-1, &stat, WNOHANG)) > 0)
-		printf("child %d terminated\n", pid);
+		printf("**child process %d terminated**\n", pid);
 	return;
 }

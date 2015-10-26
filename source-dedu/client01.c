@@ -7,7 +7,7 @@
  */
 void inquiry_by_fp(int sockfd, char *fp) {
 	char	recvline[MAXLINE];
-	char *sendline = "this is fingerprint";
+	char *sendline = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d Test";
 	
 	Write(sockfd, sendline, strlen(sendline));
 

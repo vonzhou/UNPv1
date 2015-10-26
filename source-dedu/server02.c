@@ -4,19 +4,44 @@
  * Get file fingerprint from client
  * see if the file is duplicated
  * reply with yes/no  
+ * 
+ * server 02
+ * recv file by fixed chunk
  */
+
+// 40B hex for 20B sha1
+#define FP_LEN 40 
+
+// get fp+filename to dedu
 void recv_fp(int sockfd) {
 	ssize_t		n;
 	char		buf[MAXLINE];
 	char *res = "no";
+	char fp[FP_LEN+1];
+	char filename[MAXLINE];
 
 	n = read(sockfd, buf, MAXLINE);
 
+	memcpy(fp, buf, FP_LEN);
+	memcpy(filename, &buf[FP_LEN], n - FP_LEN);
+	filename[n - FP_LEN] = '\0';
+	// printf("File FP: %s, File name: %s\n", fp, filename);
+
 	// look up this fp for dedu
-
-	printf("%s\n", buf);
-
+	if(isExistsFP(fp)){
+		res = "yes";
+	}
+	
 	Write(sockfd, res, strlen(res));
+
+	// update the index, filename->fp, fp->refCount
+	addFilename(fp, filename);
+	addFileFP(fp, filename);
+}
+
+void closeNagle(int sockfd){
+	int flag = 1;
+	Setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 }
 
 void
@@ -25,30 +50,53 @@ recv_chunk(int sockfd)
 	ssize_t		n;
 	char		buf[MAXLINE];
 	char *res = "data recv done";
+	FILE *fs = NULL; // for store
+	int chunk_count = 0;
+	char fp[FP_LEN+1];
+	char filename[MAXLINE];
+	fp[FP_LEN] = '\0';
+
 
 	// recv the data chunk and store 
 	while ( (n = read(sockfd, buf, MAXLINE)) > 0){
 		if(strcmp(buf, "exit") == 0){
-			res = "exit";
-			Write(sockfd, buf, strlen(res));
-			printf("%s %s\n", "while:", "recv_chunk end");
+			//3. EOF
+			printf("File EOF\n");
 			break;
 		}else{
-			// store this chunk and index 
-			printf("%s\n", "chunk recevied and store...");
-			// if need reply to the client ?
-			res = "chunk stored";
-			Write(sockfd, res, strlen(res));
+			//1. we know the first packet is fp+file name
+			if(chunk_count == 0){
+				// get file fp and file name
+				memcpy(fp, buf, FP_LEN);
+				memcpy(filename, &buf[FP_LEN], n - FP_LEN);
+				filename[n - FP_LEN] = '\0';
+				// printf("File FP: %s, File name: %s\n", fp, filename);
+				res = "fp_filename";
+				Write(sockfd, res, strlen(res));
+
+				// index has been updated in recv_fp, so here just create file for store
+				fs = fopen(fp, "wb");
+				if(!fs){
+					printf("fopen error\n");
+					exit(-1);
+				}
+			}else{
+				// 2. store this file and index 
+				printf("**%d bytes recved and stored**\n", n);
+				fwrite(buf, sizeof(char), n, fs);
+				// if need reply to the client ?
+			}
 		}
+
+		chunk_count ++; 
 		memset(buf, 0, sizeof(buf));
 	}
+	fclose(fs);
 }
 
 
 
-int
-main(int argc, char **argv)
-{
+int main(int argc, char **argv){
 	int					listenfd, listenfd2, connfd, udpfd, nready, maxfdp1;
 	char				mesg[MAXLINE];
 	pid_t				childpid;
@@ -59,7 +107,10 @@ main(int argc, char **argv)
 	struct sockaddr_in	cliaddr, servaddr;
 	void				sig_chld(int);
 
-	/* create listening TCP socket : fingerprint packet recv */
+	// init hiredis 
+	redisInit();
+
+	/* 1. create listening TCP socket : fingerprint packet recv */
 	listenfd = Socket(AF_INET, SOCK_STREAM, 0);
 
 	bzero(&servaddr, sizeof(servaddr));
@@ -72,7 +123,7 @@ main(int argc, char **argv)
 
 	Listen(listenfd, LISTENQ);
 
-	/* create listening TCP socket : other packet */
+	/* 2. create listening TCP socket : other packet */
 	listenfd2 = Socket(AF_INET, SOCK_STREAM, 0);
 
 	bzero(&servaddr, sizeof(servaddr));
